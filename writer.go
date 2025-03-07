@@ -1020,25 +1020,18 @@ func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []
 		})
 	}
 
-	columns := make([]format.ColumnChunk, len(w.columnChunk))
-	copy(columns, w.columnChunk)
-
-	columnIndex := make([]format.ColumnIndex, len(w.columnIndex))
-	copy(columnIndex, w.columnIndex)
-
-	offsetIndex := make([]format.OffsetIndex, len(w.offsetIndex))
-	copy(offsetIndex, w.offsetIndex)
+	columns := slices.Clone(w.columnChunk)
+	columnIndex := slices.Clone(w.columnIndex)
+	offsetIndex := slices.Clone(w.offsetIndex)
 
 	for i := range columns {
 		c := &columns[i]
-		c.MetaData.EncodingStats = make([]format.PageEncodingStats, len(c.MetaData.EncodingStats))
-		copy(c.MetaData.EncodingStats, w.columnChunk[i].MetaData.EncodingStats)
+		c.MetaData.EncodingStats = slices.Clone(w.columnChunk[i].MetaData.EncodingStats)
 	}
 
 	for i := range offsetIndex {
 		c := &offsetIndex[i]
-		c.PageLocations = make([]format.PageLocation, len(c.PageLocations))
-		copy(c.PageLocations, w.offsetIndex[i].PageLocations)
+		c.PageLocations = slices.Clone(w.offsetIndex[i].PageLocations)
 	}
 
 	w.rowGroups = append(w.rowGroups, format.RowGroup{
