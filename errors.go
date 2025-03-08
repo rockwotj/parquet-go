@@ -63,6 +63,10 @@ var (
 	// ErrMalformedRepetitionLevel is returned when a page reader encounters
 	// a repetition level which does not start at the beginning of a row.
 	ErrMalformedRepetitionLevel = errors.New("parquet-go encountered a malformed data page which does not start at the beginning of a row")
+
+	// ErrMalformedRepetitionLevel is returned when a page reader encounters
+	// a repetition level which does not start at the beginning of a row.
+	ErrRowGroupMaxSize = errors.New("row group has hit the maximum configured number of rows")
 )
 
 type errno int

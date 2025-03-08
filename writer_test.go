@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -514,7 +515,7 @@ func TestIssueSegmentio375(t *testing.T) {
 	for i := range rows {
 		rows[i] = Row{
 			FirstName: "0123456789"[i%10 : i%10+1],
-			LastName:  "foo",
+			LastName:  "foo_" + strconv.Itoa(i),
 		}
 	}
 
@@ -538,6 +539,74 @@ func TestIssueSegmentio375(t *testing.T) {
 	rowGroups := f.RowGroups()
 	if len(rowGroups) != 10 {
 		t.Errorf("wrong number of row groups in parquet file: want=10 got=%d", len(rowGroups))
+	}
+	r := parquet.NewReader(f)
+	for _, want := range rows {
+		var got Row
+		err := r.Read(&got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("got: %+v, want: %+v", got, want)
+		}
+	}
+	if err := r.Read(&Row{}); !errors.Is(err, io.EOF) {
+		t.Errorf("expected EOF after reading rows: %v", err)
+	}
+}
+
+// Same test as above, but using the raw row API instead of
+// the reflection based API.
+func TestIssueSegmentio375_RawRows(t *testing.T) {
+	output := new(bytes.Buffer)
+	writer := parquet.NewGenericWriter[struct{ A, B string }](output, parquet.MaxRowsPerRowGroup(10))
+
+	rows := make([]parquet.Row, 100)
+	for i := range rows {
+		rows[i] = parquet.Row{
+			parquet.ValueOf("0123456789"[i%10 : i%10+1]),
+			parquet.ValueOf("foo_" + strconv.Itoa(i)),
+		}
+	}
+
+	n, err := writer.WriteRows(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != len(rows) {
+		t.Fatal("wrong number of rows written:", n)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := parquet.OpenFile(bytes.NewReader(output.Bytes()), int64(output.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rowGroups := f.RowGroups()
+	if len(rowGroups) != 10 {
+		t.Errorf("wrong number of row groups in parquet file: want=10 got=%d", len(rowGroups))
+	}
+	r := parquet.NewReader(f)
+	got := make(parquet.Row, 2)
+	for _, want := range rows {
+		n, err := r.ReadRows([]parquet.Row{got})
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatal("expected to read 1 row got:", n)
+		}
+		if !slices.EqualFunc(got, want, parquet.Equal) {
+			t.Errorf("got: %+v, want: %+v", got, want)
+		}
+	}
+	if err := r.Read([]parquet.Row{got}); !errors.Is(err, io.EOF) {
+		t.Errorf("expected EOF after reading rows: %v", err)
 	}
 }
 
