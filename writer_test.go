@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -1524,5 +1525,74 @@ func TestColumnSkipPageBounds(t *testing.T) {
 	}
 	if string(statistics.MaxValue) != "" {
 		t.Fatalf("wrong max value of row groups in parquet file: want='' got=%s", string(statistics.MaxValue))
+	}
+}
+
+func TestConcurrentRowGroupConstruction(t *testing.T) {
+	b := bytes.NewBuffer(nil)
+	group := parquet.Group{}
+	group["a"] = parquet.String()
+	group["b"] = parquet.Int(64)
+	group["c"] = parquet.Leaf(parquet.BooleanType)
+	schema := parquet.NewSchema("root", group)
+	w := parquet.NewGenericWriter[any](b, schema)
+	rgs := make([]*parquet.GenericRowGroupWriter[any], 5)
+	var wg sync.WaitGroup
+	for i := range rgs {
+		wg.Add(1)
+		rg := w.BeginRowGroup()
+		rgs[i] = rg
+		go func() {
+			defer wg.Done()
+			for j := range 5 {
+				n, err := rg.WriteRows([]parquet.Row{{
+					parquet.ByteArrayValue([]byte(strconv.Itoa(i + j))),
+					parquet.Int64Value(int64(i + j)),
+					parquet.BooleanValue(i%2 == 0),
+				}})
+				if err != nil {
+					t.Error("err from write: ", err)
+				} else if n != 1 {
+					t.Error("invalid result rows from write: ", n)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if t.Failed() {
+		return
+	}
+	for _, rg := range rgs {
+		_, err := w.CommitRowGroup(rg)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if w.File().NumRows() != 25 {
+		t.Fatal("unexpected num rows:", w.File().NumRows())
+	}
+	r := parquet.NewReader(bytes.NewReader(b.Bytes()))
+	for i := range 5 {
+		for j := range 5 {
+			var row map[string]any
+			err := r.Read(&row)
+			if err != nil && !errors.Is(err, io.EOF) {
+				t.Fatal(err)
+			}
+			expected := map[string]any{
+				"a": strconv.Itoa(i + j),
+				"b": int64(i + j),
+				"c": i%2 == 0,
+			}
+			if !reflect.DeepEqual(expected, row) {
+				t.Fatal("ixj=", i, j, "want:", expected, "got:", row)
+			}
+		}
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
