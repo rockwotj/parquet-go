@@ -174,18 +174,39 @@ func makeWriteFunc[T any](t reflect.Type, schema *Schema) writeFunc[T] {
 	}
 }
 
+// Close must be called after all values were produced to the writer in order to
+// flush all buffers and write the parquet footer.
 func (w *GenericWriter[T]) Close() error {
 	return w.base.Close()
 }
 
+// Flush flushes all buffers into a row group to the underlying io.Writer.
+//
+// Flush is called automatically on Close, it is only useful to call explicitly
+// if the application needs to limit the size of row groups or wants to produce
+// multiple row groups per file.
+//
+// If the writer attempts to create more than MaxRowGroups row groups the method
+// returns ErrTooManyRowGroups.
 func (w *GenericWriter[T]) Flush() error {
 	return w.base.Flush()
 }
 
+// Reset clears the state of the writer without flushing any of the buffers,
+// and setting the output to the io.Writer passed as argument, allowing the
+// writer to be reused to produce another parquet file.
+//
+// Reset may be called at any time, including after a writer was closed.
 func (w *GenericWriter[T]) Reset(output io.Writer) {
 	w.base.Reset(output)
 }
 
+// Write is called to write more rows to the parquet file.
+//
+// The method uses the parquet schema configured on w to traverse the Go value
+// and decompose it into a set of columns and values. If no schema were passed
+// to NewWriter, it is deducted from the Go type of the row, which then have to
+// be a struct or pointer to struct.
 func (w *GenericWriter[T]) Write(rows []T) (written int, err error) {
 	var n int
 	for len(rows) > 0 {
@@ -217,10 +238,24 @@ func (w *GenericWriter[T]) Write(rows []T) (written int, err error) {
 	return
 }
 
+// WriteRows is called to write rows to the parquet file.
+//
+// The Writer must have been given a schema when NewWriter was called, otherwise
+// the structure of the parquet file cannot be determined from the row only.
+//
+// The row is expected to contain values for each column of the writer's schema,
+// in the order produced by the parquet.(*Schema).Deconstruct method.
 func (w *GenericWriter[T]) WriteRows(rows []Row) (int, error) {
 	return w.base.WriteRows(rows)
 }
 
+// WriteRowGroup writes a row group to the parquet file.
+//
+// Buffered rows will be flushed prior to writing rows from the group, unless
+// the row group was empty in which case nothing is written to the file.
+//
+// The content of the row group is flushed to the writer; after the method
+// returns successfully, the row group will be empty and in ready to be reused.
 func (w *GenericWriter[T]) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 	return w.base.WriteRowGroup(rowGroup)
 }
@@ -238,14 +273,25 @@ func (w *GenericWriter[T]) SetKeyValueMetadata(key, value string) {
 	w.base.SetKeyValueMetadata(key, value)
 }
 
+// ReadRowsFrom reads rows from the reader passed as arguments and writes them
+// to w.
+//
+// This is similar to calling WriteRow repeatedly, but will be more efficient
+// if optimizations are supported by the reader.
 func (w *GenericWriter[T]) ReadRowsFrom(rows RowReader) (int64, error) {
 	return w.base.ReadRowsFrom(rows)
 }
 
+// Schema returns the schema of rows written by w.
+//
+// The returned value will be nil if no schema has yet been configured on w.
 func (w *GenericWriter[T]) Schema() *Schema {
 	return w.base.Schema()
 }
 
+// ColumnWriters returns writers for each column. This allows applications to
+// write values directly to each column instead of having to first assemble
+// values into rows to use WriteRows.
 func (w *GenericWriter[T]) ColumnWriters() []*ColumnWriter {
 	return w.base.ColumnWriters()
 }
