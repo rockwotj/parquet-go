@@ -459,11 +459,11 @@ func (w *Writer) WriteRowGroup(rowGroup RowGroup) (int64, error) {
 	w.writer.currentRowGroup.configureBloomFilters(rowGroup.ColumnChunks())
 	rows := rowGroup.Rows()
 	defer rows.Close()
-	n, err := CopyRows(w.writer, rows)
+	n, err := CopyRows(w.writer.currentRowGroup, rows)
 	if err != nil {
 		return n, err
 	}
-	return w.writer.writeRowGroup(rowGroup.Schema(), rowGroup.SortingColumns())
+	return w.writer.writeRowGroup(w.writer.currentRowGroup, rowGroup.Schema(), rowGroup.SortingColumns())
 }
 
 // ReadRowsFrom reads rows from the reader passed as arguments and writes them
@@ -742,7 +742,7 @@ func (w *writer) close() error {
 }
 
 func (w *writer) flush() error {
-	_, err := w.writeRowGroup(nil, nil)
+	_, err := w.writeRowGroup(w.currentRowGroup, nil, nil)
 	return err
 }
 
@@ -836,11 +836,11 @@ func (w *writer) writeFileFooter() error {
 	return err
 }
 
-func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []SortingColumn) (int64, error) {
-	if len(w.currentRowGroup.columns) == 0 {
+func (w *writer) writeRowGroup(rg *rowGroupWriter, rowGroupSchema *Schema, rowGroupSortingColumns []SortingColumn) (int64, error) {
+	if len(rg.columns) == 0 {
 		return 0, nil
 	}
-	numRows := w.currentRowGroup.columns[0].totalRowCount()
+	numRows := rg.columns[0].totalRowCount()
 	if numRows == 0 {
 		return 0, nil
 	}
@@ -850,13 +850,13 @@ func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []
 	}
 
 	defer func() {
-		w.currentRowGroup.reset()
+		rg.reset()
 		for i := range w.columnIndex {
 			w.columnIndex[i] = format.ColumnIndex{}
 		}
 	}()
 
-	for _, c := range w.currentRowGroup.columns {
+	for _, c := range rg.columns {
 		if err := c.flush(); err != nil {
 			return 0, err
 		}
@@ -870,7 +870,7 @@ func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []
 	}
 	fileOffset := w.writer.offset
 
-	for i, c := range w.currentRowGroup.columns {
+	for i, c := range rg.columns {
 		w.columnIndex[i] = format.ColumnIndex(c.columnIndex.ColumnIndex())
 
 		if c.dictionary != nil {
@@ -896,7 +896,7 @@ func (w *writer) writeRowGroup(rowGroupSchema *Schema, rowGroupSortingColumns []
 		}
 	}
 
-	for _, c := range w.currentRowGroup.columns {
+	for _, c := range rg.columns {
 		if len(c.filter) > 0 {
 			c.columnChunk.MetaData.BloomFilterOffset = w.writer.offset
 			if err := c.writeBloomFilter(&w.writer); err != nil {
